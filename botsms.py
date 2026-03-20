@@ -1,76 +1,39 @@
 import time
 import requests
-import json
 import re
 import os
 import cloudscraper
 from bs4 import BeautifulSoup
 
+# ==============================
+# CONFIG
+# ==============================
+
 BASE = "https://www.ivasms.com"
-SMS_URL = BASE + "/portal/sms/received"
+
+URLS = [
+    BASE + "/portal/sms/received",
+    BASE + "/portal/live/my_sms"
+]
+
+LOGIN_URL = BASE + "/login"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
+EMAIL = os.getenv("EMAIL")
+PASSWORD = os.getenv("PASSWORD")
+
 scraper = cloudscraper.create_scraper()
 
 # ==============================
-# LOAD COOKIES FROM RAILWAY
+# COOKIES
 # ==============================
 
 def apply_cookies():
     scraper.cookies.set("cf_clearance", os.getenv("CF_CLEARANCE"))
     scraper.cookies.set("ivas_sms_session", os.getenv("IVAS_SESSION"))
     scraper.cookies.set("XSRF-TOKEN", os.getenv("XSRF_TOKEN"))
-
-# ==============================
-# FETCH
-# ==============================
-
-def fetch():
-    try:
-        apply_cookies()
-
-        r = scraper.get(SMS_URL)
-
-        print("STATUS:", r.status_code)
-
-        if "login" in r.url:
-            print("[!] cookies expired")
-            return []
-
-        soup = BeautifulSoup(r.text, "html.parser")
-
-        text = soup.get_text(separator="\n")
-        lines = text.split("\n")
-
-        data = []
-
-        for i, line in enumerate(lines):
-            line = line.strip()
-
-            if not line:
-                continue
-
-            if re.search(r'\d{4,8}', line):
-                data.append({
-                    "id": i,
-                    "text": line
-                })
-
-        return data
-
-    except Exception as e:
-        print("ERROR:", e)
-        return []
-
-# ==============================
-# OTP
-# ==============================
-
-def extract(text):
-    m = re.search(r'\d{4,8}', text)
-    return m.group() if m else None
 
 # ==============================
 # TELEGRAM
@@ -84,30 +47,107 @@ def send(msg):
         print("Telegram error")
 
 # ==============================
+# LOGIN
+# ==============================
+
+def login():
+    try:
+        print("[LOGIN] trying...")
+
+        scraper.get(LOGIN_URL)
+
+        payload = {
+            "email": EMAIL,
+            "password": PASSWORD
+        }
+
+        r = scraper.post(LOGIN_URL, data=payload)
+
+        if "dashboard" in r.text.lower() or r.status_code == 200:
+            print("[LOGIN] success")
+            send("♻️ Login success")
+            return True
+
+        print("[LOGIN] failed")
+        return False
+
+    except Exception as e:
+        print("LOGIN ERROR:", e)
+        return False
+
+# ==============================
+# FETCH FROM MULTIPLE PAGES
+# ==============================
+
+def fetch_all():
+    data = []
+
+    for url in URLS:
+        try:
+            r = scraper.get(url)
+
+            # إذا مو مسجل دخول
+            if "login" in r.url or "Login" in r.text:
+                print("[!] Not logged in → login...")
+
+                if login():
+                    r = scraper.get(url)
+                else:
+                    continue
+
+            soup = BeautifulSoup(r.text, "html.parser")
+
+            text = soup.get_text(separator="\n")
+            lines = text.split("\n")
+
+            for line in lines:
+                line = line.strip()
+
+                if not line:
+                    continue
+
+                if re.search(r'\d{4,8}', line):
+                    data.append(line)
+
+        except Exception as e:
+            print("FETCH ERROR:", e)
+
+    return data
+
+# ==============================
+# OTP
+# ==============================
+
+def extract(text):
+    m = re.search(r'\d{4,8}', text)
+    return m.group() if m else None
+
+# ==============================
 # MAIN
 # ==============================
 
 def main():
-    print("🚀 BOT STARTED (RAILWAY COOKIE MODE)")
-    send("🚀 BOT STARTED (COOKIE MODE)")
+    print("🚀 BOT STARTED (PRO MAX)")
+    send("🚀 BOT STARTED (PRO MAX)")
 
     seen = set()
 
     while True:
-        data = fetch()
+        apply_cookies()
 
-        print(f"[📊] Messages: {len(data)}")
+        messages = fetch_all()
 
-        for m in data:
-            text = m["text"]
-            mid = m["id"]
+        print(f"[📊] Total messages: {len(messages)}")
 
+        for text in messages:
             otp = extract(text)
 
             if not otp:
                 continue
 
-            if mid in seen:
+            key = text
+
+            if key in seen:
                 continue
 
             msg = f"💬 {text}\n🔐 OTP: {otp}"
@@ -115,7 +155,7 @@ def main():
             print(msg)
             send(msg)
 
-            seen.add(mid)
+            seen.add(key)
 
         time.sleep(5)
 
