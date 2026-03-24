@@ -3,6 +3,7 @@ import requests
 import re
 import os
 import json
+import urllib.parse
 
 # ==============================
 # CONFIG
@@ -25,13 +26,29 @@ MAX_MESSAGES = 1000
 session = requests.Session()
 
 # ==============================
-# APPLY COOKIES
+# COOKIES
 # ==============================
 
 def apply_cookies():
     session.cookies.set("cf_clearance", os.getenv("CF_CLEARANCE"))
     session.cookies.set("XSRF-TOKEN", os.getenv("XSRF_TOKEN"))
     session.cookies.set("ivas_sms_session", os.getenv("IVAS_SESSION"))
+
+# ==============================
+# HEADERS (حل 419)
+# ==============================
+
+def apply_headers():
+    xsrf = urllib.parse.unquote(os.getenv("XSRF_TOKEN"))
+
+    return {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "X-Requested-With": "XMLHttpRequest",
+        "X-XSRF-TOKEN": xsrf,
+        "Referer": "https://www.ivasms.com/portal/sms/received"
+    }
 
 # ==============================
 # DUPLICATE SYSTEM
@@ -52,7 +69,7 @@ def save_sent(data):
 sent_messages = load_sent()
 
 # ==============================
-# FETCH MESSAGES
+# FETCH
 # ==============================
 
 def fetch_messages():
@@ -61,13 +78,13 @@ def fetch_messages():
     try:
         apply_cookies()
 
-        r = session.post(SUMMARY_URL)
+        r = session.post(SUMMARY_URL, headers=apply_headers())
 
-        # Debug
         print("STATUS:", r.status_code)
 
         if "login" in r.text.lower() or "Checking your browser" in r.text:
-            print("❌ Cookies expired أو Cloudflare شغال")
+            print("❌ Cookies expired أو Cloudflare")
+            print(r.text[:200])
             return []
 
         data = r.json()
@@ -75,7 +92,13 @@ def fetch_messages():
         numbers = [x.get("number") for x in data.get("data", []) if x.get("number")]
 
         for number in numbers:
-            sms_res = session.post(DETAILS_URL, data={"number": number})
+
+            sms_res = session.post(
+                DETAILS_URL,
+                data={"number": number},
+                headers=apply_headers()
+            )
+
             sms_data = sms_res.json()
 
             for sms in sms_data.get("data", []):
@@ -135,7 +158,7 @@ def send_api(number, sms):
 # ==============================
 
 def main():
-    print("🚀 BOT STARTED (COOKIE MODE)")
+    print("🚀 BOT STARTED (FINAL FIXED)")
 
     while True:
         msgs = fetch_messages()
