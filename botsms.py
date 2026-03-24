@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 # CONFIG
 # ==============================
 
-URL = "https://www.ivasms.com/portal/sms/received"
+URL = "https://www.ivasms.com/portal/live/my_sms"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -60,7 +60,7 @@ def save_sent(data):
 sent = load_sent()
 
 # ==============================
-# FETCH + EXTRACT FULL MESSAGE
+# FETCH LIVE SMS
 # ==============================
 
 def fetch():
@@ -78,38 +78,30 @@ def fetch():
 
     messages = []
 
-    rows = soup.find_all("tr")
+    # 👇 كل بلوك رسالة
+    blocks = soup.find_all("div", class_="inner")
 
-    for row in rows:
-        cols = row.find_all("td")
+    for block in blocks:
+        text = block.get_text("\n", strip=True)
 
-        if len(cols) < 3:
+        # استخراج OTP
+        if not re.search(r'\b\d{4,8}\b', text):
             continue
 
-        try:
-            # 👇 الرقم
-            number = cols[0].get_text(strip=True)
-            number = re.sub(r'\D', '', number)
+        # استخراج الرقم من الصفحة كامل
+        number_match = re.search(r'\d{10,15}', r.text)
+        number = number_match.group() if number_match else "unknown"
 
-            # 👇 نص الرسالة كامل
-            message = cols[1].get_text(" ", strip=True)
-
-            if len(message) < 5:
-                continue
-
-            messages.append({
-                "id": message,
-                "number": number,
-                "text": message
-            })
-
-        except:
-            continue
+        messages.append({
+            "id": text,
+            "number": number,
+            "text": text
+        })
 
     return messages
 
 # ==============================
-# HELPERS
+# OTP
 # ==============================
 
 def extract_otp(text):
@@ -138,13 +130,8 @@ def send_api(number, message):
     try:
         requests.post(
             API_URL,
-            json={
-                "number": number,
-                "message": message
-            },
-            headers={
-                "X-API-Key": API_KEY
-            },
+            json={"number": number, "message": message},
+            headers={"X-API-Key": API_KEY},
             timeout=5
         )
     except:
@@ -155,7 +142,7 @@ def send_api(number, message):
 # ==============================
 
 def main():
-    print("🚀 BOT STARTED (FINAL CLEAN)")
+    print("🚀 LIVE SMS BOT STARTED")
 
     while True:
         msgs = fetch()
