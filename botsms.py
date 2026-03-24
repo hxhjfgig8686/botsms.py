@@ -3,16 +3,13 @@ import requests
 import re
 import os
 import json
-import urllib.parse
+from bs4 import BeautifulSoup
 
 # ==============================
 # CONFIG
 # ==============================
 
-BASE = "https://www.ivasms.com"
-
-SUMMARY_URL = BASE + "/portal/sms/received/getsms"
-DETAILS_URL = BASE + "/portal/sms/received/getdetails"
+URL = "https://www.ivasms.com/portal/sms/received"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -39,18 +36,14 @@ def apply_cookies():
 # ==============================
 
 def headers():
-    xsrf = urllib.parse.unquote(os.getenv("XSRF_TOKEN"))
     return {
         "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "X-Requested-With": "XMLHttpRequest",
-        "X-XSRF-TOKEN": xsrf,
-        "Referer": "https://www.ivasms.com/portal/sms/received"
+        "Accept": "text/html",
+        "Referer": "https://www.ivasms.com"
     }
 
 # ==============================
-# DUPLICATE
+# DUPLICATE SYSTEM
 # ==============================
 
 def load_sent():
@@ -67,77 +60,67 @@ def save_sent(data):
 sent = load_sent()
 
 # ==============================
-# SAFE JSON
-# ==============================
-
-def safe_json(r):
-    try:
-        if "application/json" not in r.headers.get("Content-Type", ""):
-            print("❌ NOT JSON:")
-            print(r.text[:300])
-            return None
-        return r.json()
-    except Exception as e:
-        print("JSON ERROR:", e)
-        print(r.text[:300])
-        return None
-
-# ==============================
-# FETCH
+# FETCH + EXTRACT FULL MESSAGE
 # ==============================
 
 def fetch():
-    msgs = []
-
     apply_cookies()
 
-    r = session.post(SUMMARY_URL, headers=headers())
+    r = session.get(URL, headers=headers())
 
     print("STATUS:", r.status_code)
 
-    data = safe_json(r)
-    if not data:
+    if "login" in r.text.lower():
+        print("❌ session expired")
         return []
 
-    numbers = [x.get("number") for x in data.get("data", []) if x.get("number")]
+    soup = BeautifulSoup(r.text, "html.parser")
 
-    for num in numbers:
+    messages = []
 
-        sms_res = session.post(
-            DETAILS_URL,
-            data={"number": num},
-            headers=headers()
-        )
+    rows = soup.find_all("tr")
 
-        sms_data = safe_json(sms_res)
-        if not sms_data:
+    for row in rows:
+        cols = row.find_all("td")
+
+        if len(cols) < 3:
             continue
 
-        for s in sms_data.get("data", []):
-            msgs.append({
-                "id": str(s.get("id")),
-                "number": num,
-                "text": s.get("message")
+        try:
+            # 👇 الرقم
+            number = cols[0].get_text(strip=True)
+            number = re.sub(r'\D', '', number)
+
+            # 👇 نص الرسالة كامل
+            message = cols[1].get_text(" ", strip=True)
+
+            if len(message) < 5:
+                continue
+
+            messages.append({
+                "id": message,
+                "number": number,
+                "text": message
             })
 
-    return msgs
+        except:
+            continue
+
+    return messages
 
 # ==============================
 # HELPERS
 # ==============================
 
-def otp(text):
-    m = re.search(r'\d{4,8}', text)
+def extract_otp(text):
+    m = re.search(r'\b\d{4,8}\b', text)
     return m.group() if m else None
-
-def clean(n):
-    return re.sub(r'\D', '', str(n))
 
 # ==============================
 # TELEGRAM
 # ==============================
 
-def send_tg(msg):
+def send_telegram(msg):
     try:
         requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
@@ -148,56 +131,60 @@ def send_tg(msg):
         pass
 
 # ==============================
-# API
+# API SERVER
 # ==============================
 
-def send_api(n, m):
+def send_api(number, message):
     try:
         requests.post(
             API_URL,
-            json={"number": n, "message": m},
-            headers={"X-API-Key": API_KEY},
+            json={
+                "number": number,
+                "message": message
+            },
+            headers={
+                "X-API-Key": API_KEY
+            },
             timeout=5
         )
     except:
         pass
 
 # ==============================
-# MAIN
+# MAIN LOOP
 # ==============================
 
 def main():
-    print("🚀 STARTED FINAL")
+    print("🚀 BOT STARTED (FINAL CLEAN)")
 
     while True:
-
         msgs = fetch()
 
-        print("📊", len(msgs))
+        print("📊 messages:", len(msgs))
 
         for m in msgs:
 
             if m["id"] in sent:
                 continue
 
-            number = clean(m["number"])
+            number = m["number"]
             text = m["text"]
+            otp = extract_otp(text)
 
-            code = otp(text)
+            output = f"📱 {number}\n💬 {text}"
 
-            out = f"💬 {text}"
-            if code:
-                out += f"\n🔐 OTP: {code}"
+            if otp:
+                output += f"\n🔐 OTP: {otp}"
 
-            print(out)
+            print(output)
 
-            send_tg(out)
+            send_telegram(output)
             send_api(number, text)
 
             sent.add(m["id"])
             save_sent(sent)
 
-        time.sleep(3)
+        time.sleep(5)
 
 # ==============================
 # START
