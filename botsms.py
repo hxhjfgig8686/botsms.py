@@ -20,10 +20,10 @@ CHAT_ID = os.getenv("CHAT_ID")
 API_URL = "https://apiserver-37it.onrender.com/receive_sms"
 API_KEY = os.getenv("API_KEY")
 
-SENT_MESSAGES_FILE = "ivasms_sent_messages.json"
-MAX_MESSAGES = 1000
-
 session = requests.Session()
+
+SENT_FILE = "sent.json"
+MAX = 1000
 
 # ==============================
 # COOKIES
@@ -35,12 +35,11 @@ def apply_cookies():
     session.cookies.set("ivas_sms_session", os.getenv("IVAS_SESSION"))
 
 # ==============================
-# HEADERS (حل 419)
+# HEADERS
 # ==============================
 
-def apply_headers():
+def headers():
     xsrf = urllib.parse.unquote(os.getenv("XSRF_TOKEN"))
-
     return {
         "User-Agent": "Mozilla/5.0",
         "Accept": "application/json, text/plain, */*",
@@ -51,140 +50,152 @@ def apply_headers():
     }
 
 # ==============================
-# DUPLICATE SYSTEM
+# DUPLICATE
 # ==============================
 
 def load_sent():
-    if not os.path.exists(SENT_MESSAGES_FILE):
+    if not os.path.exists(SENT_FILE):
         return set()
     try:
-        return set(json.load(open(SENT_MESSAGES_FILE)))
+        return set(json.load(open(SENT_FILE)))
     except:
         return set()
 
 def save_sent(data):
-    data = list(data)[-MAX_MESSAGES:]
-    json.dump(data, open(SENT_MESSAGES_FILE, "w"))
+    json.dump(list(data)[-MAX:], open(SENT_FILE, "w"))
 
-sent_messages = load_sent()
+sent = load_sent()
+
+# ==============================
+# SAFE JSON
+# ==============================
+
+def safe_json(r):
+    try:
+        if "application/json" not in r.headers.get("Content-Type", ""):
+            print("❌ NOT JSON:")
+            print(r.text[:300])
+            return None
+        return r.json()
+    except Exception as e:
+        print("JSON ERROR:", e)
+        print(r.text[:300])
+        return None
 
 # ==============================
 # FETCH
 # ==============================
 
-def fetch_messages():
-    messages = []
+def fetch():
+    msgs = []
 
-    try:
-        apply_cookies()
+    apply_cookies()
 
-        r = session.post(SUMMARY_URL, headers=apply_headers())
+    r = session.post(SUMMARY_URL, headers=headers())
 
-        print("STATUS:", r.status_code)
+    print("STATUS:", r.status_code)
 
-        if "login" in r.text.lower() or "Checking your browser" in r.text:
-            print("❌ Cookies expired أو Cloudflare")
-            print(r.text[:200])
-            return []
+    data = safe_json(r)
+    if not data:
+        return []
 
-        data = r.json()
+    numbers = [x.get("number") for x in data.get("data", []) if x.get("number")]
 
-        numbers = [x.get("number") for x in data.get("data", []) if x.get("number")]
+    for num in numbers:
 
-        for number in numbers:
+        sms_res = session.post(
+            DETAILS_URL,
+            data={"number": num},
+            headers=headers()
+        )
 
-            sms_res = session.post(
-                DETAILS_URL,
-                data={"number": number},
-                headers=apply_headers()
-            )
+        sms_data = safe_json(sms_res)
+        if not sms_data:
+            continue
 
-            sms_data = sms_res.json()
+        for s in sms_data.get("data", []):
+            msgs.append({
+                "id": str(s.get("id")),
+                "number": num,
+                "text": s.get("message")
+            })
 
-            for sms in sms_data.get("data", []):
-                messages.append({
-                    "id": str(sms.get("id")),
-                    "number": number,
-                    "text": sms.get("message")
-                })
-
-    except Exception as e:
-        print("ERROR:", e)
-
-    return messages
+    return msgs
 
 # ==============================
 # HELPERS
 # ==============================
 
-def extract_otp(text):
-    m = re.search(r'\b\d{4,8}\b', text)
+def otp(text):
+    m = re.search(r'\d{4,8}', text)
     return m.group() if m else None
 
-def clean_number(n):
+def clean(n):
     return re.sub(r'\D', '', str(n))
 
 # ==============================
 # TELEGRAM
 # ==============================
 
-def send_telegram(msg):
+def send_tg(msg):
     try:
         requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
             data={"chat_id": CHAT_ID, "text": msg},
             timeout=5
         )
-    except Exception as e:
-        print("Telegram error:", e)
+    except:
+        pass
 
 # ==============================
-# API SERVER
+# API
 # ==============================
 
-def send_api(number, sms):
+def send_api(n, m):
     try:
         requests.post(
             API_URL,
-            json={"number": number, "message": sms},
+            json={"number": n, "message": m},
             headers={"X-API-Key": API_KEY},
             timeout=5
         )
-    except Exception as e:
-        print("API error:", e)
+    except:
+        pass
 
 # ==============================
-# MAIN LOOP
+# MAIN
 # ==============================
 
 def main():
-    print("🚀 BOT STARTED (FINAL FIXED)")
+    print("🚀 STARTED FINAL")
 
     while True:
-        msgs = fetch_messages()
 
-        print("📊 messages:", len(msgs))
+        msgs = fetch()
+
+        print("📊", len(msgs))
 
         for m in msgs:
 
-            if m["id"] in sent_messages:
+            if m["id"] in sent:
                 continue
 
-            number = clean_number(m["number"])
-            sms = m["text"]
-            otp = extract_otp(sms)
+            number = clean(m["number"])
+            text = m["text"]
 
-            text = f"💬 {sms}"
-            if otp:
-                text += f"\n🔐 OTP: {otp}"
+            code = otp(text)
 
-            print(text)
+            out = f"💬 {text}"
+            if code:
+                out += f"\n🔐 OTP: {code}"
 
-            send_telegram(text)
-            send_api(number, sms)
+            print(out)
 
-            sent_messages.add(m["id"])
-            save_sent(sent_messages)
+            send_tg(out)
+            send_api(number, text)
+
+            sent.add(m["id"])
+            save_sent(sent)
 
         time.sleep(3)
 
