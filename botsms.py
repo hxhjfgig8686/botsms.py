@@ -10,18 +10,14 @@ import json
 
 BASE = "https://www.ivasms.com"
 
-LOGIN_URL = BASE + "/login"
 SUMMARY_URL = BASE + "/portal/sms/received/getsms"
 DETAILS_URL = BASE + "/portal/sms/received/getdetails"
-
-EMAIL = os.getenv("EMAIL")
-PASSWORD = os.getenv("PASSWORD")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 API_URL = "https://apiserver-37it.onrender.com/receive_sms"
-API_KEY = "sk_cc1480ac..."
+API_KEY = os.getenv("API_KEY")
 
 SENT_MESSAGES_FILE = "ivasms_sent_messages.json"
 MAX_MESSAGES = 1000
@@ -29,7 +25,16 @@ MAX_MESSAGES = 1000
 session = requests.Session()
 
 # ==============================
-# DUPLICATES
+# APPLY COOKIES
+# ==============================
+
+def apply_cookies():
+    session.cookies.set("cf_clearance", os.getenv("CF_CLEARANCE"))
+    session.cookies.set("XSRF-TOKEN", os.getenv("XSRF_TOKEN"))
+    session.cookies.set("ivas_sms_session", os.getenv("IVAS_SESSION"))
+
+# ==============================
+# DUPLICATE SYSTEM
 # ==============================
 
 def load_sent():
@@ -47,42 +52,23 @@ def save_sent(data):
 sent_messages = load_sent()
 
 # ==============================
-# LOGIN
-# ==============================
-
-def login():
-    print("[LOGIN]...")
-
-    session.get(LOGIN_URL)
-
-    r = session.post(LOGIN_URL, data={
-        "email": EMAIL,
-        "password": PASSWORD
-    })
-
-    if r.status_code == 200:
-        print("✔ Logged in")
-        return True
-
-    print("❌ Login failed")
-    return False
-
-# ==============================
-# FETCH
+# FETCH MESSAGES
 # ==============================
 
 def fetch_messages():
     messages = []
 
     try:
+        apply_cookies()
+
         r = session.post(SUMMARY_URL)
 
-        # إذا خرج من الجلسة
-        if "login" in r.text.lower():
-            if not login():
-                return []
+        # Debug
+        print("STATUS:", r.status_code)
 
-            r = session.post(SUMMARY_URL)
+        if "login" in r.text.lower() or "Checking your browser" in r.text:
+            print("❌ Cookies expired أو Cloudflare شغال")
+            return []
 
         data = r.json()
 
@@ -126,8 +112,8 @@ def send_telegram(msg):
             data={"chat_id": CHAT_ID, "text": msg},
             timeout=5
         )
-    except:
-        pass
+    except Exception as e:
+        print("Telegram error:", e)
 
 # ==============================
 # API SERVER
@@ -141,22 +127,20 @@ def send_api(number, sms):
             headers={"X-API-Key": API_KEY},
             timeout=5
         )
-    except:
-        pass
+    except Exception as e:
+        print("API error:", e)
 
 # ==============================
-# MAIN
+# MAIN LOOP
 # ==============================
 
 def main():
-    print("🚀 STARTED")
-
-    login()
+    print("🚀 BOT STARTED (COOKIE MODE)")
 
     while True:
         msgs = fetch_messages()
 
-        print("📊", len(msgs))
+        print("📊 messages:", len(msgs))
 
         for m in msgs:
 
